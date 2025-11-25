@@ -17,4 +17,4 @@ RUN useradd -m marimo_user
 USER marimo_user
 
 # Startbefehl
-CMD ["marimo", "run", "app.py", "--host", "0.0.0.0", "--port", "4444"]
+CMD ["marimo", "run", "marimo.py", "--host", "0.0.0.0", "--port", "4444"]
