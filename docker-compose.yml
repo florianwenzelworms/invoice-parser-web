@@ -1,0 +1,11 @@
+version: '3.8'
+services:
+  invoice-parser:
+    build: .
+    ports:
+      - "80:4444"
+    volumes:
+      # WICHTIG: Die Config-Datei muss auf dem Host existieren!
+      # Touch sie vorher auf dem Host, sonst erstellt Docker einen Ordner.
+      - ./usk_config.json:/app/usk_config.json
+    restart: unless-stopped
