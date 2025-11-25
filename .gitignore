@@ -3,3 +3,4 @@ __marimo__
 layouts
 .idea
 __pycache__
+configs/config*rows.json

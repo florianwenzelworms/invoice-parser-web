@@ -27,40 +27,13 @@ def _():
     # Sicherstellen, dass der Ordner existiert
     os.makedirs(CONFIG_DIR, exist_ok=True)
 
-    # Standard-Fallback (falls gar nichts existiert)
+    # Standard-Fallback
     default_fallback = {
         "Allgemein": {"xSta": "05000.10000"},
         "hsh.olav": {"FueZ": "11310.10010"}
     }
 
-    # --- HELPER FUNKTIONEN ---
-
-    def get_saved_configs():
-        """Liest alle Config-Dateien und formatiert sie für das Dropdown."""
-        files = glob.glob(os.path.join(CONFIG_DIR, "config_*.json"))
-        files.sort(key=os.path.getmtime, reverse=True) # Neueste zuerst
-
-        options = {}
-        for f in files:
-            try:
-                # Dateiname: config_YYYY-MM-DD_HH-MM-SS_XXrows.json
-                name = os.path.basename(f)
-                parts = name.replace("config_", "").replace(".json", "").split("_")
-
-                # Datum & Zeit schön formatieren
-                date_part = parts[0] # YYYY-MM-DD
-                time_part = parts[1].replace("-", ":") # HH:MM:SS
-                rows_part = parts[2].replace("rows", "") # Anzahl Zeilen
-
-                dt_obj = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
-                pretty_date = dt_obj.strftime("%d.%m.%Y um %H:%M Uhr")
-
-                label = f"📅 {pretty_date} ({rows_part} Einträge)"
-                options[label] = f # Der Wert ist der volle Pfad
-            except:
-                continue
-
-        return options
+    # --- STATISCHE HELPER (Die sich nicht ändern) ---
 
     def load_json(filepath):
         try:
@@ -70,7 +43,6 @@ def _():
             return default_fallback
 
     def flatten_data(data):
-        """Wandelt JSON Baum in Tabelle um"""
         flat_list = []
         for key, value in data.items():
             if isinstance(value, dict):
@@ -87,7 +59,7 @@ def _():
         datetime,
         default_fallback,
         flatten_data,
-        get_saved_configs,
+        glob,
         json,
         load_json,
         logging,
@@ -100,111 +72,184 @@ def _():
 
 
 @app.cell
-def _(mo):
-    # --- BUTTON DEFINITIONEN ---
-    # Wir definieren sie hier, damit nachfolgende Zellen darauf reagieren können
-
-    btn_save_version = mo.ui.button(
-        label="💾 Als Backup speichern", 
-        tooltip="Erstellt eine neue Datei mit Zeitstempel im Archiv.",
-        kind="neutral"
-    )
-
-    btn_load_backup = mo.ui.button(
-        label="📂 Laden",
-        tooltip="Überschreibt die aktuelle Tabelle mit der gewählten Datei.",
-        kind="warn"
-    )
-    return btn_load_backup, btn_save_version
-
-
-@app.cell
 def _(
     CONFIG_DIR,
     CURRENT_CONFIG_FILE,
-    btn_save_version,
     datetime,
     default_fallback,
     flatten_data,
-    get_saved_configs,
+    glob,
     json,
     load_json,
     mo,
     os,
 ):
-    # --- LOGIK: BACKUP SPEICHERN ---
-    save_msg = ""
+    # --- STATE MANAGEMENT ---
+    get_update_trigger, set_update_trigger = mo.state(0)
+    get_status_msg, set_status_msg = mo.state("")
 
-    # Wir prüfen, ob der Button geklickt wurde
-    if btn_save_version.value:
-        try:
-            # Sicherheitshalber Ordner erstellen, falls er fehlt
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-        
-            # Datenquelle bestimmen: Entweder aktuelle Config oder Fallback
-            if os.path.exists(CURRENT_CONFIG_FILE):
-                data_to_backup = load_json(CURRENT_CONFIG_FILE)
-            else:
-                # Falls noch keine Datei da ist, nehmen wir die Defaults
-                data_to_backup = default_fallback
+    # --- REAKTIVER HELPER ---
+    # Dieser muss HIER sein, weil er auf 'get_update_trigger' zugreift
+    def get_saved_configs():
+        """Liest alle Backups aus dem Ordner"""
+        # Trigger lesen -> Liste aktualisiert sich bei Änderungen
+        _ = get_update_trigger()
+    
+        files = glob.glob(os.path.join(CONFIG_DIR, "config_*.json"))
+        files.sort(key=os.path.getmtime, reverse=True)
+    
+        options = {}
+        for f in files:
+            try:
+                name = os.path.basename(f)
+                parts = name.replace("config_", "").replace(".json", "").split("_")
+                date_part = parts[0]
+                time_part = parts[1].replace("-", ":")
+                rows_part = parts[2].replace("rows", "")
             
-            # Dateinamen generieren
-            row_count = len(flatten_data(data_to_backup))
+                dt_obj = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
+                pretty_date = dt_obj.strftime("%d.%m.%Y um %H:%M Uhr")
+            
+                label = f"📅 {pretty_date} ({rows_part} Einträge)"
+                options[label] = f
+            except:
+                continue
+        return options
+
+    # --- ACTION HANDLER ---
+
+    def action_save_backup():
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            if os.path.exists(CURRENT_CONFIG_FILE):
+                data = load_json(CURRENT_CONFIG_FILE) # Nutzt Funktion aus Zelle 1
+            else:
+                data = default_fallback
+            
+            row_count = len(flatten_data(data)) # Nutzt Funktion aus Zelle 1
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            fname = f"config_{timestamp}_{row_count}rows.json"
+            fpath = os.path.join(CONFIG_DIR, fname)
         
-            backup_filename = f"config_{timestamp}_{row_count}rows.json"
-            backup_filepath = os.path.join(CONFIG_DIR, backup_filename)
-        
-            # Speichern
-            with open(backup_filepath, "w", encoding="utf-8") as f:
-                json.dump(data_to_backup, f, indent=4)
-        
-            save_msg = f"✅ Backup erstellt: {backup_filename}"
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+            
+            set_status_msg(f"✅ Backup erstellt: {fname}")
+            set_update_trigger(get_update_trigger() + 1)
         
         except Exception as e:
-            save_msg = f"❌ Fehler: {str(e)}"
+            set_status_msg(f"❌ Fehler beim Backup: {e}")
 
-    # --- DROPDOWN BAUEN ---
-    # Liste aktualisieren (damit das neue Backup sofort erscheint)
-    backup_options = get_saved_configs()
+    def action_load_backup():
+        # ACHTUNG: Wir müssen hier auf 'dd_backups' zugreifen.
+        # Da dd_backups erst in Zelle 2b definiert wird, greifen wir
+        # hier noch nicht darauf zu, sondern erst beim Klick (Lambda).
+        # Das wird durch die Reihenfolge im Notebook gelöst.
+        pass 
 
-    dd_backups = mo.ui.dropdown(
-        options=backup_options,
-        label="Wiederherstellen aus Archiv:",
-        full_width=True
+    # Wir definieren die Load-Logik direkt im Button-Lambda oder in einer Funktion,
+    # die Zugriff auf dd_backups hat. Um Zirkelbezüge zu vermeiden,
+    # lagern wir die Logik für LOAD in Zelle 2b aus oder übergeben den Wert.
+    # Einfacher Trick: Wir definieren die Funktion HIER, aber holen den Wert erst zur Laufzeit.
+
+    # --- BUTTONS ---
+    btn_save_version = mo.ui.button(
+        label="💾 Als Backup speichern", 
+        on_click=lambda _: action_save_backup(),
+        kind="neutral"
     )
-    return dd_backups, save_msg
+
+    # Den Load Button definieren wir hier, aber die Logik bauen wir gleich
+    # zusammen mit dem Dropdown in Zelle 2b, um den Zugriff sicherzustellen.
+    btn_load_backup = mo.ui.button(
+        label="📂 Laden & Aktivieren",
+        kind="warn"
+    )
+    return (
+        btn_save_version,
+        get_saved_configs,
+        get_status_msg,
+        get_update_trigger,
+        set_status_msg,
+        set_update_trigger,
+    )
 
 
 @app.cell
 def _(
     CURRENT_CONFIG_FILE,
-    btn_load_backup,
+    get_saved_configs,
+    get_update_trigger,
+    json,
+    load_json,
+    mo,
+    os,
+    set_status_msg,
+    set_update_trigger,
+):
+    # --- DROPDOWN ---
+    backup_options = get_saved_configs()
+    dd_backups = mo.ui.dropdown(
+        options=backup_options,
+        label="Wiederherstellen aus Archiv:",
+        full_width=True
+    )
+
+    # --- LOAD ACTION ---
+    # Wir definieren die Load-Funktion HIER, wo das Dropdown bekannt ist
+    def run_load_action():
+        selected_file = dd_backups.value
+    
+        if selected_file and os.path.exists(selected_file):
+            try:
+                data = load_json(selected_file)
+                with open(CURRENT_CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4)
+                
+                set_status_msg(f"♻️ Erfolgreich geladen: {os.path.basename(selected_file)}")
+                set_update_trigger(get_update_trigger() + 1)
+            except Exception as e:
+                set_status_msg(f"❌ Fehler beim Laden: {e}")
+        else:
+            set_status_msg("⚠️ Bitte erst eine Datei auswählen.")
+
+    # Wir verknüpfen den Button aus Zelle 2a nachträglich mit dieser Funktion?
+    # Nein, das geht in Marimo nicht gut rückwärts.
+    # BESSER: Wir erstellen den Load-Button einfach HIER in Zelle 2b neu,
+    # dann kennt er das Dropdown.
+    # (Den btn_load_backup in Zelle 2a kannst du ignorieren oder löschen)
+
+    btn_load_real = mo.ui.button(
+        label="📂 Laden & Aktivieren",
+        on_click=lambda _: run_load_action(),
+        kind="warn"
+    )
+    return btn_load_real, dd_backups
+
+
+@app.cell
+def _(
+    CURRENT_CONFIG_FILE,
+    btn_load_real,
     btn_save_version,
     dd_backups,
     default_fallback,
     flatten_data,
+    get_status_msg,
+    get_update_trigger,
     load_json,
     mo,
     os,
     pd,
-    save_msg,
 ):
-    # --- LOGIK: DATEN LADEN ---
-    load_msg = ""
-    current_data = default_fallback # Default Startwert
+    # ... (Anfang gleich wie vorher) ...
+    _ = get_update_trigger()
 
-    # Entscheidung: Was laden wir?
-    if btn_load_backup.value and dd_backups.value:
-        # Fall A: Backup laden
-        if os.path.exists(dd_backups.value):
-            current_data = load_json(dd_backups.value)
-            load_msg = mo.callout(f"♻️ Stand wiederhergestellt: {os.path.basename(dd_backups.value)}", kind="info")
-    elif os.path.exists(CURRENT_CONFIG_FILE):
-        # Fall B: Aktuelle Config laden (Normalfall)
+    if os.path.exists(CURRENT_CONFIG_FILE):
         current_data = load_json(CURRENT_CONFIG_FILE)
+    else:
+        current_data = default_fallback
 
-    # --- TABELLE VORBEREITEN ---
     df_raw = pd.DataFrame(flatten_data(current_data))
     df_komplett = df_raw.rename(columns={
         "Gruppe": "Gruppe (Kategorie)",
@@ -224,28 +269,22 @@ def _(
         filetypes=[".xml"]
     )
 
-    # --- CSS STYLES ---
+    status_msg = get_status_msg()
+
     styles = mo.Html("""
         <style>
             #marimo-header button[aria-label='App menu'], header button[aria-label='App menu'] { display: none !important; }
-            .email-btn {
-                display: inline-block; padding: 0.5rem 1rem; background-color: #fee2e2; color: #991b1b;
-                border: 1px solid #fca5a5; border-radius: 0.375rem; text-decoration: none; font-weight: 600;
-            }
-            a[download] {
-                display: inline-block; width: 100%; text-align: center; background-color: #16a34a !important;
-                color: white !important; padding: 12px 20px; font-weight: bold; border-radius: 8px; text-decoration: none;
-            }
+            .email-btn { display: inline-block; padding: 0.5rem 1rem; background-color: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; border-radius: 0.375rem; text-decoration: none; font-weight: 600; }
+            a[download] { display: inline-block; width: 100%; text-align: center; background-color: #16a34a !important; color: white !important; padding: 12px 20px; font-weight: bold; border-radius: 8px; text-decoration: none; }
         </style>
     """)
 
-    # --- LAYOUT ---
     backup_ui = mo.accordion({
         "⚙️ Konfigurationen verwalten (Laden / Speichern)": mo.vstack([
-            mo.hstack([btn_save_version, mo.md(f"*{save_msg}*")]),
+            mo.hstack([btn_save_version, mo.md(f"*{status_msg}*")]),
             mo.md("---"),
-            mo.hstack([dd_backups, btn_load_backup], align="end"),
-            load_msg if load_msg else mo.md("")
+            # HIER NEU: btn_load_real verwenden
+            mo.hstack([dd_backups, btn_load_real], align="end")
         ])
     })
 
