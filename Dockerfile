@@ -10,7 +10,7 @@ RUN pip install marimo pandas xmltodict xlsxwriter
 COPY . .
 
 # Port exponieren
-EXPOSE 80
+EXPOSE 4444
 
 # User anlegen (Best Practice, nicht als root laufen lassen)
 RUN useradd -m marimo_user
