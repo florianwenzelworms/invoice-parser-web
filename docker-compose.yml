@@ -8,5 +8,5 @@ services:
     volumes:
       # WICHTIG: Die Config-Datei muss auf dem Host existieren!
       # Touch sie vorher auf dem Host, sonst erstellt Docker einen Ordner.
-      - ./usk_config.json:/app/usk_config.json
+      - ./configs:/app/configs
     restart: unless-stopped
