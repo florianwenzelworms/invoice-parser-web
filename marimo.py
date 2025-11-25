@@ -13,6 +13,7 @@ def _():
     import zipfile
     import pandas as pd
     import logging
+    import urllib.parse
     from io import BytesIO
 
     # Importiere deine Datei
@@ -65,6 +66,7 @@ def _():
         os,
         pd,
         tempfile,
+        urllib,
         zipfile,
     )
 
@@ -100,23 +102,18 @@ def _(btn_reset, default_data, default_fallback, flatten_data, mo, pd):
 
     # 2. DataFrame bauen
     df_raw = pd.DataFrame(flatten_data(aktuelles_daten_set))
-
-    # TRICK: Spalten umbenennen, um Breite zu erzwingen!
-    # Das funktioniert, weil marimo die Spalte so breit macht wie die Überschrift.
     df_komplett = df_raw.rename(columns={
         "Gruppe": "Gruppe (Kategorie)",
         "Name": "Name / Beschreibung der Position",
         "USK": "USK Nummer (Format 12345.12345)"
     })
 
-    # 3. Der Editor
-    # KORREKTUR: frozen_columns entfernt
+    # 3. UI Elemente
     tabelle_editor = mo.ui.data_editor(
         data=df_komplett, 
         label="Tabelle bearbeiten (Änderungen werden automatisch gespeichert)",
     )
 
-    # 4. Upload Feld
     file_uploader = mo.ui.file(
         label="XML Dateien hier ablegen", 
         kind="area", 
@@ -124,14 +121,58 @@ def _(btn_reset, default_data, default_fallback, flatten_data, mo, pd):
         filetypes=[".xml"]
     )
 
+    # --- CSS HACK: Styles ---
+    hide_menu_style = mo.Html("""
+        <style>
+            /* Menü ausblenden */
+            #marimo-header button[aria-label='App menu'], 
+            header button[aria-label='App menu'] { display: none !important; }
+        
+            /* Style für den Email-Button (Rot) */
+            .email-btn {
+                display: inline-block;
+                padding: 0.5rem 1rem;
+                background-color: #fee2e2; 
+                color: #991b1b;
+                border: 1px solid #fca5a5;
+                border-radius: 0.375rem;
+                text-decoration: none;
+                font-size: 0.875rem;
+                font-weight: 600;
+                cursor: pointer;
+            }
+            .email-btn:hover { background-color: #fecaca; }
+
+            /* NEU: Style für den Download-Button (Fett & Grün) */
+            /* Wir selektieren alle Links mit einem download-Attribut */
+            a[download] {
+                display: inline-block;
+                width: 100%;             /* Volle Breite */
+                text-align: center;
+                background-color: #16a34a !important; /* Kräftiges Grün */
+                color: white !important;
+                padding: 12px 20px;
+                font-size: 1.1rem;
+                font-weight: bold;
+                border-radius: 8px;
+                text-decoration: none;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+                transition: transform 0.1s;
+            }
+            a[download]:hover {
+                background-color: #15803d !important; /* Dunkleres Grün beim Hover */
+                transform: scale(1.01);
+            }
+        </style>
+    """)
+
     # Layout
     mo.vstack([
+        hide_menu_style,
         mo.md("# 🧾 Invoice Parser Web"),
         mo.md("**Info:** Änderungen an der Tabelle werden sofort gespeichert."),
-    
         tabelle_editor,
         mo.hstack([btn_reset], justify="end"),
-    
         mo.md("---"),
         file_uploader
     ])
@@ -150,6 +191,7 @@ def _(
     os,
     tabelle_editor,
     tempfile,
+    urllib,
     zipfile,
 ):
     processed_files = []
@@ -161,7 +203,6 @@ def _(
     usk_struktur = {}
 
     for index, row in df_neu.iterrows():
-        # Wir benutzen hier die LANGEN Namen aus Zelle 2b
         gruppe = str(row["Gruppe (Kategorie)"]).strip()
         name = str(row["Name / Beschreibung der Position"]).strip()
         usk = str(row["USK Nummer (Format 12345.12345)"]).strip()
@@ -175,9 +216,8 @@ def _(
             if gruppe not in usk_struktur: usk_struktur[gruppe] = {}
             usk_struktur[gruppe][name] = usk
 
-    usk_json_string = json.dumps(usk_struktur)
+    usk_json_string = json.dumps(usk_struktur, indent=4)
 
-    # Speichern
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f_write:
             json.dump(usk_struktur, f_write, indent=4)
@@ -186,8 +226,9 @@ def _(
 
     # -------------------------------------
 
+    problematische_dateien = []
+
     if file_uploader.value:
-    
         logger = logging.getLogger("Invoice Parser")
         logger.handlers = []
         logger.addHandler(logging.NullHandler())
@@ -224,31 +265,98 @@ def _(
                         log_messages.append(f"✅ {filename} erfolgreich verarbeitet.")
                     else:
                         log_messages.append(f"⚠️ {filename}: Excel wurde nicht erstellt.")
+                        problematische_dateien.append(filename)
                 except Exception as e:
-                    log_messages.append(f"❌ Fehler bei {filename}: {str(e)}")
+                    err_msg = str(e)
+                    log_messages.append(f"❌ Fehler bei {filename}: {err_msg}")
+                    problematische_dateien.append(filename)
+
+    # --- EMAIL GENERATOR ---
+    fehler_text = "\n".join([msg for msg in log_messages if "❌" in msg or "⚠️" in msg])
+    if not fehler_text:
+        fehler_text = "Keine offensichtlichen Fehler im Protokoll."
+
+    dateien_hinweis = ""
+    if problematische_dateien:
+        dateien_liste = ", ".join(problematische_dateien)
+        dateien_hinweis = f"Dateien: {dateien_liste}"
+
+    email_body = f"""Hallo Hotline-Team,
+
+    ich habe Probleme mit dem Invoice Parser.
+
+    --- FEHLERPROTOKOLL ---
+    {fehler_text}
+
+    --- BETROFFENE DATEIEN ---
+    {dateien_hinweis if dateien_hinweis else "Keine spezifischen Dateien betroffen."}
+
+    ***********************************************************************
+    >>> BITTE DIESE DATEIEN MANUELL AN DIESE E-MAIL ANHÄNGEN! <<<
+    ***********************************************************************
+
+    --- VERWENDETE CONFIG ---
+    {usk_json_string}
+
+    Viele Grüße
+    """
+
+    params = {
+        "subject": "Invoice Parser Web Anfrage",
+        "body": email_body
+    }
+    query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote) 
+    mailto_link = f"mailto:hotline@worms.de?{query_string}"
+
+    email_button = mo.Html(f"""
+        <div style="margin-top: 20px; text-align: right;">
+            <a href="{mailto_link}" class="email-btn">
+                📧 Fehler melden (Email öffnen)
+            </a>
+        </div>
+    """)
 
     # Ausgabe
-    if processed_files:
+    if processed_files or log_messages:
+        # 1. Protokoll
         ergebnis_anzeige.append(mo.md("**Verarbeitungsprotokoll:**\n" + "\n".join([f"* {msg}" for msg in log_messages])))
     
-        if len(processed_files) == 1:
-            dl = mo.download(
-                data=processed_files[0]["content"],
-                filename=processed_files[0]["name"],
-                label=f"Download {processed_files[0]['name']}"
+        # 2. Email Button
+        ergebnis_anzeige.append(email_button)
+    
+        # 3. DOWNLOAD BEREICH
+        if processed_files:
+            # Hier berechnen wir die Zahlen für die Anzeige
+            anzahl_erfolg = len(processed_files)
+            anzahl_gesamt = len(file_uploader.value)
+            status_text = f"{anzahl_erfolg}/{anzahl_gesamt} Dateien wurden erfolgreich konvertiert."
+        
+            if len(processed_files) == 1:
+                dl_obj = mo.download(
+                    data=processed_files[0]["content"],
+                    filename=processed_files[0]["name"],
+                    label=f"Download {processed_files[0]['name']}"
+                )
+            else:
+                zip_buffer = BytesIO()
+                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+                    for p_file in processed_files:
+                        zip_file.writestr(p_file["name"], p_file["content"])
+                dl_obj = mo.download(
+                    data=zip_buffer.getvalue(),
+                    filename="rechnungen_export.zip",
+                    label=f"Download alle ({len(processed_files)} Dateien) als ZIP"
+                )
+
+            # Grüne Success-Box
+            success_box = mo.callout(
+                mo.vstack([
+                    mo.md(f"### 🎉 Fertig!\n**{status_text}**"), # Hier nutzen wir den neuen Text
+                    dl_obj
+                ]),
+                kind="success"
             )
-            ergebnis_anzeige.append(dl)
-        else:
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                for p_file in processed_files:
-                    zip_file.writestr(p_file["name"], p_file["content"])
-            dl = mo.download(
-                data=zip_buffer.getvalue(),
-                filename="rechnungen_export.zip",
-                label=f"Download alle ({len(processed_files)} Dateien) als ZIP"
-            )
-            ergebnis_anzeige.append(dl)
+            ergebnis_anzeige.append(success_box)
 
     mo.vstack(ergebnis_anzeige)
     return
