@@ -1,3 +1,5 @@
-__pycache__
+.venv/
+__marimo__
+layouts
 .idea
-.git
+__pycache__
