@@ -398,7 +398,7 @@ Viele Grüße
 
                 if len(processed_files) == 1:
                     dl_obj = mo.download(processed_files[0]["content"], filename=processed_files[0]["name"],
-                                         label=f"Download {processed_files[0]["name"]}")
+                                         label=f"Download {processed_files[0]['name']}")
                 else:
                     zip_buffer = BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
