@@ -52,7 +52,6 @@ def _():
                 flat_list.append({"Gruppe": "BASIS", "Name": key, "USK": value})
         return flat_list
     return (
-        BytesIO,
         CONFIG_DIR,
         CURRENT_CONFIG_FILE,
         Invoice,
@@ -62,12 +61,9 @@ def _():
         glob,
         json,
         load_json,
-        logging,
         mo,
         os,
         pd,
-        urllib,
-        zipfile,
     )
 
 
@@ -94,10 +90,10 @@ def _(
         """Liest alle Backups aus dem Ordner"""
         # Trigger lesen -> Liste aktualisiert sich bei Änderungen
         _ = get_update_trigger()
-    
+
         files = glob.glob(os.path.join(CONFIG_DIR, "config_*.json"))
         files.sort(key=os.path.getmtime, reverse=True)
-    
+
         options = {}
         for f in files:
             try:
@@ -106,10 +102,10 @@ def _(
                 date_part = parts[0]
                 time_part = parts[1].replace("-", ":")
                 rows_part = parts[2].replace("rows", "")
-            
+
                 dt_obj = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
                 pretty_date = dt_obj.strftime("%d.%m.%Y um %H:%M Uhr")
-            
+
                 label = f"📅 {pretty_date} ({rows_part} Einträge)"
                 options[label] = f
             except:
@@ -125,18 +121,18 @@ def _(
                 data = load_json(CURRENT_CONFIG_FILE) # Nutzt Funktion aus Zelle 1
             else:
                 data = default_fallback
-            
+
             row_count = len(flatten_data(data)) # Nutzt Funktion aus Zelle 1
             timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
             fname = f"config_{timestamp}_{row_count}rows.json"
             fpath = os.path.join(CONFIG_DIR, fname)
-        
+
             with open(fpath, "w", encoding="utf-8") as f:
                 json.dump(data, f, indent=4)
-            
+
             set_status_msg(f"✅ Backup erstellt: {fname}")
             set_update_trigger(get_update_trigger() + 1)
-        
+
         except Exception as e:
             set_status_msg(f"❌ Fehler beim Backup: {e}")
 
@@ -199,13 +195,13 @@ def _(
     # Wir definieren die Load-Funktion HIER, wo das Dropdown bekannt ist
     def run_load_action():
         selected_file = dd_backups.value
-    
+
         if selected_file and os.path.exists(selected_file):
             try:
                 data = load_json(selected_file)
                 with open(CURRENT_CONFIG_FILE, "w", encoding="utf-8") as f:
                     json.dump(data, f, indent=4)
-                
+
                 set_status_msg(f"♻️ Erfolgreich geladen: {os.path.basename(selected_file)}")
                 set_update_trigger(get_update_trigger() + 1)
             except Exception as e:
@@ -301,107 +297,114 @@ def _(
 
 
 @app.cell
-def _(
-    BytesIO,
-    CURRENT_CONFIG_FILE,
-    Invoice,
-    file_uploader,
-    json,
-    logging,
-    mo,
-    os,
-    tabelle_editor,
-    tempfile,
-    urllib,
-    zipfile,
-):
-    processed_files = []
-    log_messages = []
+def _(CURRENT_CONFIG_FILE, Invoice, file_uploader, mo, tabelle_editor):
+    # --- SICHERHEITS-IMPORTS (Lokal für diese Zelle) ---
+    # Wir nutzen Unterstriche (_), damit Marimo nicht meckert.
+    import os as _os
+    import json as _json
+    import tempfile as _tempfile
+    import logging as _logging
+    import urllib.parse as _urllib_parse
+    from io import BytesIO as _BytesIO
+    import zipfile as _zipfile
+    import traceback as _traceback
+
+    # Globale Listen für den Output
     ergebnis_anzeige = []
 
-    # --- 1. DATEN VERARBEITEN & AUTO-SAVE ---
-    df_neu = tabelle_editor.value
-    usk_struktur = {}
-
-    for index, row in df_neu.iterrows():
-        gruppe = str(row["Gruppe (Kategorie)"]).strip()
-        name = str(row["Name / Beschreibung der Position"]).strip()
-        usk = str(row["USK Nummer (Format 12345.12345)"]).strip()
-
-        if not name or not usk: continue
-        if not gruppe: gruppe = "BASIS"
-
-        if gruppe == "BASIS":
-            usk_struktur[name] = usk
-        else:
-            if gruppe not in usk_struktur: usk_struktur[gruppe] = {}
-            usk_struktur[gruppe][name] = usk
-
-    usk_json_string = json.dumps(usk_struktur, indent=4)
-
-    # AUTO-SAVE: Wir überschreiben immer die 'current_config.json'
     try:
-        with open(CURRENT_CONFIG_FILE, "w", encoding="utf-8") as f_write:
-            json.dump(usk_struktur, f_write, indent=4)
-    except Exception as e:
-        log_messages.append(f"❌ Warnung: Auto-Save fehlgeschlagen: {e}")
+        # --- PRÜFUNG: Ist 'Invoice' da? ---
+        # Wir importieren es NICHT neu, um den Marimo-Fehler zu vermeiden.
+        # Wir prüfen nur, ob es existiert.
+        if 'Invoice' not in globals():
+            raise Exception("Die Klasse 'Invoice' wurde nicht gefunden. Bitte lade die Seite neu (Strg + F5), damit Zelle 1 geladen wird.")
 
-    # -------------------------------------
+        processed_files = []
+        log_messages = []
+        problematische_dateien = []
 
-    problematische_dateien = []
+        # --- 1. DATEN VORBEREITEN ---
+        df_neu = tabelle_editor.value
+        usk_struktur = {}
 
-    if file_uploader.value:
-        logger = logging.getLogger("Invoice Parser")
-        logger.handlers = []
-        logger.addHandler(logging.NullHandler())
-        logger.propagate = False
+        for index, row in df_neu.iterrows():
+            gruppe = str(row["Gruppe (Kategorie)"]).strip()
+            name = str(row["Name / Beschreibung der Position"]).strip()
+            usk = str(row["USK Nummer (Format 12345.12345)"]).strip()
+        
+            if not name or not usk: continue
+            if not gruppe: gruppe = "BASIS"
+            
+            if gruppe == "BASIS":
+                usk_struktur[name] = usk
+            else:
+                if gruppe not in usk_struktur: usk_struktur[gruppe] = {}
+                usk_struktur[gruppe][name] = usk
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            src_path = os.path.join(temp_dir, "input") + os.sep
-            dest_path = os.path.join(temp_dir, "output") + os.sep
-            os.makedirs(src_path, exist_ok=True)
-            os.makedirs(dest_path, exist_ok=True)
+        usk_json_string = _json.dumps(usk_struktur, indent=4)
 
-            for file_obj in file_uploader.value:
-                file_path = os.path.join(src_path, file_obj.name)
-                with open(file_path, "wb") as f_up:
-                    f_up.write(file_obj.contents)
+        # --- 2. AUTO-SAVE LOGIK ---
+        try:
+            _os.makedirs(_os.path.dirname(CURRENT_CONFIG_FILE), exist_ok=True)
+            with open(CURRENT_CONFIG_FILE, "w", encoding="utf-8") as f_write:
+                _json.dump(usk_struktur, f_write, indent=4)
+        except Exception as e:
+            log_messages.append(f"❌ Warnung: Auto-Save fehlgeschlagen: {e}")
 
-            fake_config = {
-                "files": {"source_path": src_path, "destination_path": dest_path},
-                "usk": {"usk_liste": usk_json_string}
-            }
+        # --- 3. DATEI VERARBEITUNG ---
+        if file_uploader.value:
+            logger = _logging.getLogger("Invoice Parser")
+            logger.handlers = []
+            logger.addHandler(_logging.NullHandler())
+            logger.propagate = False
 
-            files_in_temp = os.listdir(src_path)
-            for filename in files_in_temp:
-                try:
-                    invoice_processor = Invoice(filename, fake_config)
-                    created_file_path = invoice_processor.create_file()
+            with _tempfile.TemporaryDirectory() as temp_dir:
+                src_path = _os.path.join(temp_dir, "input") + _os.sep
+                dest_path = _os.path.join(temp_dir, "output") + _os.sep
+                _os.makedirs(src_path, exist_ok=True)
+                _os.makedirs(dest_path, exist_ok=True)
 
-                    if os.path.exists(created_file_path):
-                        with open(created_file_path, "rb") as f_res:
-                            processed_files.append({
-                                "name": os.path.basename(created_file_path),
-                                "content": f_res.read()
-                            })
-                        log_messages.append(f"✅ {filename} erfolgreich verarbeitet.")
-                    else:
-                        log_messages.append(f"⚠️ {filename}: Excel wurde nicht erstellt.")
+                for file_obj in file_uploader.value:
+                    file_path = _os.path.join(src_path, file_obj.name)
+                    with open(file_path, "wb") as f_up:
+                        f_up.write(file_obj.contents)
+
+                fake_config = {
+                    "files": {"source_path": src_path, "destination_path": dest_path},
+                    "usk": {"usk_liste": usk_json_string}
+                }
+
+                files_in_temp = _os.listdir(src_path)
+                for filename in files_in_temp:
+                    try:
+                        # Hier nutzen wir das globale 'Invoice' aus Zelle 1
+                        invoice_processor = Invoice(filename, fake_config)
+                        created_file_path = invoice_processor.create_file()
+                    
+                        if _os.path.exists(created_file_path):
+                            with open(created_file_path, "rb") as f_res:
+                                processed_files.append({
+                                    "name": _os.path.basename(created_file_path),
+                                    "content": f_res.read()
+                                })
+                            log_messages.append(f"✅ {filename} erfolgreich verarbeitet.")
+                        else:
+                            log_messages.append(f"⚠️ {filename}: Excel wurde nicht erstellt.")
+                            problematische_dateien.append(filename)
+                    except Exception as e:
+                        err_msg = str(e)
+                        log_messages.append(f"❌ Fehler bei {filename}: {err_msg}")
                         problematische_dateien.append(filename)
-                except Exception as e:
-                    err_msg = str(e)
-                    log_messages.append(f"❌ Fehler bei {filename}: {err_msg}")
-                    problematische_dateien.append(filename)
 
-    # --- EMAIL & AUSGABE ---
-    fehler_text = "\n".join([msg for msg in log_messages if "❌" in msg or "⚠️" in msg])
-    if not fehler_text: fehler_text = "Keine offensichtlichen Fehler im Protokoll."
+        # --- 4. EMAIL & AUSGABE BAUEN ---
+        fehler_text = "\n".join([msg for msg in log_messages if "❌" in msg or "⚠️" in msg])
+        if not fehler_text: fehler_text = "Keine offensichtlichen Fehler im Protokoll."
 
-    dateien_hinweis = ""
-    if problematische_dateien:
-        dateien_hinweis = f"Dateien: {', '.join(problematische_dateien)}"
+        dateien_hinweis = ""
+        if problematische_dateien:
+            dateien_hinweis = f"Dateien: {', '.join(problematische_dateien)}"
 
-    email_body = f"""Hallo Hotline-Team,
+        email_body = f"""Hallo Hotline-Team,
 
     ich habe Probleme mit dem Invoice Parser.
 
@@ -421,36 +424,42 @@ def _(
     Viele Grüße
     """
 
-    params = {"subject": "Invoice Parser Web Anfrage", "body": email_body}
-    query_string = urllib.parse.urlencode(params, quote_via=urllib.parse.quote) 
-    mailto_link = f"mailto:hotline@worms.de?{query_string}"
+        params = {"subject": "Invoice Parser Web Anfrage", "body": email_body}
+        query_string = _urllib_parse.urlencode(params, quote_via=_urllib_parse.quote) 
+        mailto_link = f"mailto:hotline@worms.de?{query_string}"
 
-    email_button = mo.Html(f"""
-        <div style="margin-top: 20px; text-align: right;">
-            <a href="{mailto_link}" class="email-btn">📧 Fehler melden (Email öffnen)</a>
-        </div>
-    """)
+        email_button = mo.Html(f"""
+            <div style="margin-top: 20px; text-align: right;">
+                <a href="{mailto_link}" class="email-btn">📧 Fehler melden (Email öffnen)</a>
+            </div>
+        """)
 
-    if processed_files or log_messages:
-        ergebnis_anzeige.append(mo.md("**Verarbeitungsprotokoll:**\n" + "\n".join([f"* {msg}" for msg in log_messages])))
-        ergebnis_anzeige.append(email_button)
+        if processed_files or log_messages:
+            ergebnis_anzeige.append(mo.md("**Verarbeitungsprotokoll:**\n" + "\n".join([f"* {msg}" for msg in log_messages])))
+            ergebnis_anzeige.append(email_button)
+        
+            if processed_files:
+                anzahl_erfolg = len(processed_files)
+                anzahl_gesamt = len(file_uploader.value)
+                status_text = f"{anzahl_erfolg}/{anzahl_gesamt} Dateien wurden erfolgreich konvertiert."
+            
+                if len(processed_files) == 1:
+                    dl_obj = mo.download(processed_files[0]["content"], filename=processed_files[0]["name"], label=f"Download {processed_files[0]["name"]}")
+                else:
+                    zip_buffer = _BytesIO()
+                    with _zipfile.ZipFile(zip_buffer, "w", _zipfile.ZIP_DEFLATED) as zip_file:
+                        for p_file in processed_files:
+                            zip_file.writestr(p_file["name"], p_file["content"])
+                    dl_obj = mo.download(zip_buffer.getvalue(), filename="rechnungen_export.zip", label=f"Download alle ({len(processed_files)} Dateien) als ZIP")
 
-        if processed_files:
-            anzahl_erfolg = len(processed_files)
-            anzahl_gesamt = len(file_uploader.value)
-            status_text = f"{anzahl_erfolg}/{anzahl_gesamt} Dateien wurden erfolgreich konvertiert."
+                ergebnis_anzeige.append(mo.callout(mo.vstack([mo.md(f"### 🎉 Fertig!\n**{status_text}**"), dl_obj]), kind="success"))
 
-            if len(processed_files) == 1:
-                dl_obj = mo.download(processed_files[0]["content"], filename=processed_files[0]["name"], label=f"Download {processed_files[0]['name']}")
-            else:
-                zip_buffer = BytesIO()
-                with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-                    for p_file in processed_files:
-                        zip_file.writestr(p_file["name"], p_file["content"])
-                dl_obj = mo.download(zip_buffer.getvalue(), filename="rechnungen_export.zip", label=f"Download alle ({len(processed_files)} Dateien) als ZIP")
+    except Exception as e_critical:
+        # --- CRASH HANDLER ---
+        err_trace = _traceback.format_exc()
+        ergebnis_anzeige.append(mo.callout(mo.md(f"## 🔥 KRITISCHER FEHLER\n\n`{str(e_critical)}`\n\n**Details:**\n```\n{err_trace}\n```"), kind="danger"))
 
-            ergebnis_anzeige.append(mo.callout(mo.vstack([mo.md(f"### 🎉 Fertig!\n**{status_text}**"), dl_obj]), kind="success"))
-
+    # Ausgabe
     mo.vstack(ergebnis_anzeige)
     return
 
