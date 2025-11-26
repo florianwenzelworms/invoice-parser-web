@@ -20,8 +20,6 @@ def _():
     import traceback
 
     # Importiere deine Datei
-    # Falls Invoice.py im selben Ordner liegt, findet er sie.
-    # Falls nicht, fangen wir den Fehler später ab.
     try:
         from Invoice import Invoice
     except ImportError:
@@ -186,8 +184,6 @@ def _(CURRENT_CONFIG_FILE, btn_load_real, get_saved_configs, get_update_trigger,
         else:
             set_status_msg("⚠️ Bitte erst eine Datei auswählen.")
 
-    # Wir müssen dem Button von oben nachträglich die Funktion zuweisen?
-    # Nein, wir rufen die Logik auf, wenn sich btn_load_real ändert.
     if btn_load_real.value:
         run_load_action()
     return dd_backups, run_load_action
@@ -269,16 +265,26 @@ def _(BytesIO, CURRENT_CONFIG_FILE, Invoice, file_uploader, json, logging, mo, o
     ergebnis_anzeige = []
 
     try:
-        # Import Prüfung
         if Invoice is None:
-            raise Exception("Die Klasse 'Invoice' (Invoice.py) wurde nicht gefunden. Liegt die Datei im Ordner?")
+            raise Exception("Die Klasse 'Invoice' (Invoice.py) wurde nicht gefunden.")
 
         processed_files = []
         log_messages = []
         problematische_dateien = []
 
-        # 1. RÜCKUMWANDLUNG
+        # 1. RÜCKUMWANDLUNG & SCHEMA CHECK
         df_neu = tabelle_editor.value
+
+        # --- SICHERHEITS-CHECK: Sind alle Spalten da? ---
+        erwartete_spalten = ["Gruppe (Kategorie)", "Name / Beschreibung der Position",
+                             "USK Nummer (Format 12345.12345)"]
+        fehlende_spalten = [col for col in erwartete_spalten if col not in df_neu.columns]
+
+        if fehlende_spalten:
+            raise Exception(
+                f"Spaltenstruktur beschädigt! Folgende Spalten fehlen: {', '.join(fehlende_spalten)}. Bitte klicke oben auf 'Laden', um die Tabelle zu reparieren.")
+        # ------------------------------------------------
+
         usk_struktur = {}
 
         for index, row in df_neu.iterrows():
@@ -397,8 +403,11 @@ Viele Grüße
                 status_text = f"{anzahl_erfolg}/{anzahl_gesamt} Dateien wurden erfolgreich konvertiert."
 
                 if len(processed_files) == 1:
-                    dl_obj = mo.download(processed_files[0]["content"], filename=processed_files[0]["name"],
-                                         label=f"Download {processed_files[0]['name']}")
+                    dl_obj = mo.download(
+                        processed_files[0]["content"],
+                        filename=processed_files[0]["name"],
+                        label=f"Download {processed_files[0]['name']}"
+                    )
                 else:
                     zip_buffer = BytesIO()
                     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -420,12 +429,15 @@ Viele Grüße
         dateien_hinweis,
         dest_path,
         dl_obj,
+        df_neu,
         email_body,
         email_button,
         ergebnis_anzeige,
         err_msg,
         err_trace,
+        erwartete_spalten,
         fake_config,
+        fehlende_spalten,
         fehler_text,
         file_obj,
         file_path,
