@@ -1,15 +1,6 @@
 FROM python:3.11-slim
-
 WORKDIR /app
-
-# Dependencies installieren
 RUN pip install marimo pandas xmltodict xlsxwriter
-
-# Code kopieren
 COPY . .
-
-# Port exponieren
 EXPOSE 80
-
-# Startbefehl
-CMD ["marimo", "run", "marimo.py", "--host", "0.0.0.0", "--port", "80"]
+CMD ["marimo", "run", "app.py", "--host", "0.0.0.0", "--port", "80"]

@@ -7,7 +7,5 @@ services:
     ports:
       - "80:4444"
     volumes:
-      # WICHTIG: Die Config-Datei muss auf dem Host existieren!
-      # Touch sie vorher auf dem Host, sonst erstellt Docker einen Ordner.
       - .:/app
     restart: unless-stopped
