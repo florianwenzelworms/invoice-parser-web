@@ -3,7 +3,6 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # Dependencies installieren
-# (Ideal wäre requirements.txt, aber für hier reicht inline)
 RUN pip install marimo pandas xmltodict xlsxwriter
 
 # Code kopieren

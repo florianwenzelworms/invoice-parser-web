@@ -3,10 +3,11 @@ services:
   invoice-parser:
     container_name: invoice-parser
     build: .
+    user: root
     ports:
       - "80:4444"
     volumes:
       # WICHTIG: Die Config-Datei muss auf dem Host existieren!
       # Touch sie vorher auf dem Host, sonst erstellt Docker einen Ordner.
-      - ./configs:/app/configs
+      - .:/app
     restart: unless-stopped
