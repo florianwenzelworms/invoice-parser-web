@@ -79,14 +79,105 @@ def _():
 
 
 @app.cell
-def _(CONFIG_DIR, CURRENT_CONFIG_FILE, datetime, default_fallback, flatten_data, glob, load_json, mo, os):
+def _(mo):
     # --- STATE MANAGEMENT ---
+    # Trigger: Wenn sich das ändert, laden alle abhängigen Zellen neu
     get_update_trigger, set_update_trigger = mo.state(0)
-    get_status_msg, set_status_msg = mo.state("")
 
-    # --- REAKTIVER HELPER ---
+    # Status: Für Nachrichten (Grün/Rot)
+    get_status_msg, set_status_msg = mo.state("")
+    return (
+        get_status_msg,
+        get_update_trigger,
+        set_status_msg,
+        set_update_trigger,
+    )
+
+
+@app.cell
+def _(CONFIG_DIR, CURRENT_CONFIG_FILE, datetime, default_fallback, flatten_data, get_saved_configs, get_update_trigger,
+      json, load_json, mo, os, set_status_msg, set_update_trigger):
+    # --- CONTROL PANEL (Alles in einer Zelle für Sicherheit) ---
+
+    # 1. Dropdown bauen
+    backup_options = get_saved_configs()  # Holt Liste (reaktiv)
+    dd_backups = mo.ui.dropdown(
+        options=backup_options,
+        label="Wiederherstellen aus Archiv:",
+        full_width=True
+    )
+
+    # 2. Funktion: Backup Speichern
+    def action_save():
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            if os.path.exists(CURRENT_CONFIG_FILE):
+                data = load_json(CURRENT_CONFIG_FILE)
+            else:
+                data = default_fallback
+
+            row_count = len(flatten_data(data))
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            fname = f"config_{timestamp}_{row_count}rows.json"
+            fpath = os.path.join(CONFIG_DIR, fname)
+
+            with open(fpath, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+
+            set_status_msg(f"✅ Backup erstellt: {fname}")
+            set_update_trigger(get_update_trigger() + 1)
+        except Exception as e:
+            set_status_msg(f"❌ Fehler beim Backup: {e}")
+
+    # 3. Funktion: Backup Laden
+    def action_load():
+        selected_file = dd_backups.value
+        if selected_file and os.path.exists(selected_file):
+            try:
+                data = load_json(selected_file)
+                # Überschreiben der Current Config
+                with open(CURRENT_CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(data, f, indent=4)
+
+                set_status_msg(f"♻️ Erfolgreich geladen: {os.path.basename(selected_file)}")
+                # WICHTIG: Trigger feuern, damit Tabelle neu lädt
+                set_update_trigger(get_update_trigger() + 1)
+            except Exception as e:
+                set_status_msg(f"❌ Fehler beim Laden: {e}")
+        else:
+            set_status_msg("⚠️ Bitte erst eine Datei auswählen.")
+
+    # 4. Buttons (Mit on_click -> Funktioniert garantiert!)
+    btn_save = mo.ui.button(
+        label="💾 Als Backup speichern",
+        on_click=lambda _: action_save(),
+        kind="neutral"
+    )
+
+    btn_load = mo.ui.button(
+        label="📂 Laden & Aktivieren",
+        on_click=lambda _: action_load(),
+        kind="warn"
+    )
+
+    # 5. UI Zusammenbauen
+    status_msg = mo.md(f"*{mo.state(get_status_msg)[0]}*")  # Holt aktuellen Status
+
+    control_panel = mo.accordion({
+        "⚙️ Konfigurationen verwalten (Laden / Speichern)": mo.vstack([
+            mo.hstack([btn_save, status_msg]),
+            mo.md("---"),
+            mo.hstack([dd_backups, btn_load], align="end")
+        ])
+    })
+    return action_load, action_save, btn_load, btn_save, control_panel, dd_backups, status_msg
+
+
+@app.cell
+def _(CONFIG_DIR, datetime, get_update_trigger, glob, os):
+    # --- HELPER: CONFIGS SUCHEN ---
     def get_saved_configs():
-        """Liest alle Backups aus dem Ordner"""
+        # Reagiert auf Updates
         _ = get_update_trigger()
 
         files = glob.glob(os.path.join(CONFIG_DIR, "config_*.json"))
@@ -110,96 +201,23 @@ def _(CONFIG_DIR, CURRENT_CONFIG_FILE, datetime, default_fallback, flatten_data,
                 continue
         return options
 
-    # --- ACTION HANDLER ---
-    def action_save_backup():
-        try:
-            os.makedirs(CONFIG_DIR, exist_ok=True)
-            if os.path.exists(CURRENT_CONFIG_FILE):
-                data = load_json(CURRENT_CONFIG_FILE)
-            else:
-                data = default_fallback
-
-            row_count = len(flatten_data(data))
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            fname = f"config_{timestamp}_{row_count}rows.json"
-            fpath = os.path.join(CONFIG_DIR, fname)
-
-            with open(fpath, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=4)
-
-            set_status_msg(f"✅ Backup erstellt: {fname}")
-            set_update_trigger(get_update_trigger() + 1)
-
-        except Exception as e:
-            set_status_msg(f"❌ Fehler beim Backup: {e}")
-
-    # --- BUTTONS ---
-    btn_save_version = mo.ui.button(
-        label="💾 Als Backup speichern",
-        on_click=lambda _: action_save_backup(),
-        kind="neutral"
-    )
-
-    btn_load_real = mo.ui.button(
-        label="📂 Laden & Aktivieren",
-        kind="warn"
-    )
-    return (
-        action_save_backup,
-        btn_load_real,
-        btn_save_version,
-        get_saved_configs,
-        get_status_msg,
-        get_update_trigger,
-        set_status_msg,
-        set_update_trigger,
-    )
+    return (get_saved_configs,)
 
 
 @app.cell
-def _(CURRENT_CONFIG_FILE, btn_load_real, get_saved_configs, get_update_trigger, json, load_json, mo, os,
-      set_status_msg, set_update_trigger):
-    # --- DROPDOWN ---
-    backup_options = get_saved_configs()
-    dd_backups = mo.ui.dropdown(
-        options=backup_options,
-        label="Wiederherstellen aus Archiv:",
-        full_width=True
-    )
+def _(CURRENT_CONFIG_FILE, control_panel, default_fallback, flatten_data, get_update_trigger, load_json, mo, os, pd):
+    # --- HAUPTANSICHT (TABELLE & UPLOAD) ---
 
-    # --- LOAD ACTION ---
-    def run_load_action():
-        selected_file = dd_backups.value
-
-        if selected_file and os.path.exists(selected_file):
-            try:
-                data = load_json(selected_file)
-                with open(CURRENT_CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=4)
-
-                set_status_msg(f"♻️ Erfolgreich geladen: {os.path.basename(selected_file)}")
-                set_update_trigger(get_update_trigger() + 1)
-            except Exception as e:
-                set_status_msg(f"❌ Fehler beim Laden: {e}")
-        else:
-            set_status_msg("⚠️ Bitte erst eine Datei auswählen.")
-
-    if btn_load_real.value:
-        run_load_action()
-    return dd_backups, run_load_action
-
-
-@app.cell
-def _(CURRENT_CONFIG_FILE, Invoice, btn_load_real, btn_save_version, dd_backups, default_fallback, flatten_data,
-      get_status_msg, get_update_trigger, json, load_json, mo, os, pd):
-    # Trigger abonnieren
+    # 1. Trigger abonnieren (Damit Tabelle neu lädt nach Load-Klick)
     _ = get_update_trigger()
 
+    # 2. Daten laden
     if os.path.exists(CURRENT_CONFIG_FILE):
         current_data = load_json(CURRENT_CONFIG_FILE)
     else:
         current_data = default_fallback
 
+    # 3. Tabelle bauen
     df_raw = pd.DataFrame(flatten_data(current_data))
     df_komplett = df_raw.rename(columns={
         "Gruppe": "Gruppe (Kategorie)",
@@ -219,8 +237,7 @@ def _(CURRENT_CONFIG_FILE, Invoice, btn_load_real, btn_save_version, dd_backups,
         filetypes=[".xml"]
     )
 
-    status_msg = get_status_msg()
-
+    # 4. Styles
     styles = mo.Html("""
         <style>
             #marimo-header button[aria-label='App menu'], header button[aria-label='App menu'] { display: none !important; }
@@ -229,30 +246,21 @@ def _(CURRENT_CONFIG_FILE, Invoice, btn_load_real, btn_save_version, dd_backups,
         </style>
     """)
 
-    backup_ui = mo.accordion({
-        "⚙️ Konfigurationen verwalten (Laden / Speichern)": mo.vstack([
-            mo.hstack([btn_save_version, mo.md(f"*{status_msg}*")]),
-            mo.md("---"),
-            mo.hstack([dd_backups, btn_load_real], align="end")
-        ])
-    })
-
+    # 5. Layout anzeigen
     mo.vstack([
         styles,
         mo.md("# 🧾 Invoice Parser Web"),
         mo.md("**Info:** Die Tabelle speichert automatisch. Erstelle Backups bei größeren Änderungen."),
-        backup_ui,
+        control_panel,  # Das Panel aus der Zelle oben
         tabelle_editor,
         mo.md("---"),
         file_uploader
     ])
     return (
-        backup_ui,
         current_data,
         df_komplett,
         df_raw,
         file_uploader,
-        status_msg,
         styles,
         tabelle_editor,
     )
@@ -261,7 +269,7 @@ def _(CURRENT_CONFIG_FILE, Invoice, btn_load_real, btn_save_version, dd_backups,
 @app.cell
 def _(BytesIO, CURRENT_CONFIG_FILE, Invoice, file_uploader, json, logging, mo, os, tabelle_editor, tempfile, traceback,
       urllib, zipfile):
-    # --- LOGIK START ---
+    # --- LOGIK & VERARBEITUNG ---
     ergebnis_anzeige = []
 
     try:
@@ -272,10 +280,10 @@ def _(BytesIO, CURRENT_CONFIG_FILE, Invoice, file_uploader, json, logging, mo, o
         log_messages = []
         problematische_dateien = []
 
-        # 1. RÜCKUMWANDLUNG & SCHEMA CHECK
+        # 1. DATEN HOLEN & CHECK
         df_neu = tabelle_editor.value
 
-        # --- SICHERHEITS-CHECK: Sind alle Spalten da? ---
+        # Spalten-Check
         erwartete_spalten = ["Gruppe (Kategorie)", "Name / Beschreibung der Position",
                              "USK Nummer (Format 12345.12345)"]
         fehlende_spalten = [col for col in erwartete_spalten if col not in df_neu.columns]
@@ -283,7 +291,6 @@ def _(BytesIO, CURRENT_CONFIG_FILE, Invoice, file_uploader, json, logging, mo, o
         if fehlende_spalten:
             raise Exception(
                 f"Spaltenstruktur beschädigt! Folgende Spalten fehlen: {', '.join(fehlende_spalten)}. Bitte klicke oben auf 'Laden', um die Tabelle zu reparieren.")
-        # ------------------------------------------------
 
         usk_struktur = {}
 
@@ -311,7 +318,7 @@ def _(BytesIO, CURRENT_CONFIG_FILE, Invoice, file_uploader, json, logging, mo, o
         except Exception as e:
             log_messages.append(f"❌ Warnung: Auto-Save fehlgeschlagen: {e}")
 
-        # 3. VERARBEITUNG
+        # 3. DATEI-VERARBEITUNG
         if file_uploader.value:
             logger = logging.getLogger("Invoice Parser")
             logger.handlers = []
@@ -355,7 +362,7 @@ def _(BytesIO, CURRENT_CONFIG_FILE, Invoice, file_uploader, json, logging, mo, o
                         log_messages.append(f"❌ Fehler bei {filename}: {err_msg}")
                         problematische_dateien.append(filename)
 
-        # 4. OUTPUT & EMAIL
+        # 4. OUTPUT
         fehler_text = "\n".join([msg for msg in log_messages if "❌" in msg or "⚠️" in msg])
         if not fehler_text: fehler_text = "Keine offensichtlichen Fehler im Protokoll."
 
